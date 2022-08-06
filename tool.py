@@ -154,6 +154,72 @@ class Manager:
 class Deferred:
     def __init__(self, callback, *args, **kwargs):
         self.callback = callback
+        
+class SelectorsList():
+    
+    def __init__(self, page, selectors):
+        self.selectors = [Selector(page, s) for s in selectors]
+        
+    # set iter to loop over selectors
+    
+    def __iter__(self):
+        return iter(self.selectors)
+    
+        
+class Selector():
+    
+    def __init__(self, page = None, _selector = None):
+        self.page = page
+        self.selector = _selector
+        
+    def _selector(
+        self,
+        selector: str,
+        timeout: float = 1000,
+        optional: bool = False,
+        all: bool = False,
+        page = None
+    ):
+        """
+        Gets the xpath of the selector and returns the playwright selector object.
+        Meant to alias the playwright selector object.
+        """
+        page = page or self.page
+        if page is None:
+            raise Exception("No page provided")
+        
+        with suppress(optional=optional):
+            print("LOOKING FOR SELECTOR", selector)
+            try:
+                t = page.wait_for_selector(selector, timeout=timeout, state='attached')
+            except:
+                if page.RETRIES > 0:
+                    page.RETRIES -= 1
+                    print('RETRYING')
+                    page.goto(page.url, wait_until='domcontentloaded')
+                else:
+                    pass
+            
+            if all:
+                return SelectorsList(selectors=page.query_selector_all(selector), page=page)
+                
+            else:
+                self.selector = page.query_selector(selector)
+                return self
+        
+    def xpath(self, selector: str, timeout: float = 1000, optional: bool = False, all: bool = False):
+        if all:
+            # create a new selector object
+            return self.__class__(self.page)._selector(selector, timeout, optional, all)
+        else:
+            return self._selector(selector, timeout, optional, all)
+        
+    def text(self):
+        return self.selector.inner_text()
+    
+    def get_attribute(self, attribute: str):
+        return self.selector.get_attribute(attribute)
+        
 
 class Page:
     
@@ -184,35 +250,38 @@ class Page:
         all: bool = False,
         delimiter: str = "\n",
     ):
-        with suppress(optional=optional):
-            print("LOOKING FOR SELECTOR", selector)
-            try:
-                t = self.page.wait_for_selector(selector, timeout=timeout, state='attached')
-            except:
-                if self.RETRIES > 0:
-                    self.RETRIES -= 1
-                    print('RETRYING')
-                    self.goto(self.url, wait_until='domcontentloaded')
-                else:
-                    print('PASSING')
-                    pass
-                    # self.close()
-                    # return self.deferred(self.xpath, selector, attribute, timeout, optional, all, delimiter)
+        s = Selector(self).xpath(selector, timeout, optional, all)
+        return s
+        
+        # with suppress(optional=optional):
+        #     print("LOOKING FOR SELECTOR", selector)
+        #     try:
+        #         t = self.page.wait_for_selector(selector, timeout=timeout, state='attached')
+        #     except:
+        #         if self.RETRIES > 0:
+        #             self.RETRIES -= 1
+        #             print('RETRYING')
+        #             self.goto(self.url, wait_until='domcontentloaded')
+        #         else:
+        #             print('PASSING')
+        #             pass
+        #             # self.close()
+        #             # return self.deferred(self.xpath, selector, attribute, timeout, optional, all, delimiter)
             
-            if all:
-                r = self.page.query_selector_all(selector)
-                if attribute == "text_content":
-                    return [r.inner_text() for r in r]
-                elif attribute:
-                    return [r.get_attribute(attribute) or "" for r in r]
+        #     if all:
+        #         r = self.page.query_selector_all(selector)
+        #         if attribute == "text_content":
+        #             return [r.inner_text() for r in r]
+        #         elif attribute:
+        #             return [r.get_attribute(attribute) or "" for r in r]
 
-            if attribute == "text_content":
-                r = self.page.query_selector(selector)
-                print('got r', r.inner_text())
-                return r.inner_text() if r else ""
-            r = self.page.query_selector(selector)
-            print('attribute is', attribute)
-            return r.get_attribute(attribute) if r else ""
+        #     if attribute == "text_content":
+        #         r = self.page.query_selector(selector)
+        #         print('got r', r.inner_text())
+        #         return r.inner_text() if r else ""
+        #     r = self.page.query_selector(selector)
+        #     print('attribute is', attribute)
+        #     return r.get_attribute(attribute) if r else ""
 
     def goto(
         self,
@@ -240,6 +309,7 @@ class Page:
             self.wait_for_timeout(delay)
             self.RETRIES_TO_BROWSER_CLOSE -= 1
             try:
+                self.results = []
                 self.goto(url, delay=delay)
                 print('WENT TO URL')
             except:

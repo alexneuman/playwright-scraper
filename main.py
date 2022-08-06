@@ -37,9 +37,12 @@ def linkedin(page):
         
 def google(page):
     page.wait_for_timeout(2000)
-    url = google_decode(page.xpath('//h3/../../a', attribute='href', all=True, optional=False))
-    name = page.xpath('//h3/div', attribute='title', all=True, optional=False)
-    return [{'name': n, 'starting_url': page.row.url, 'linkedin_url': u} for n, u in zip(name, url)]
+    # url = google_decode(page.xpath('//h3/../../a', attribute='href', all=True, optional=False))
+    names = page.xpath(selector='//h3', optional=False)
+    name = names.xpath(selector='//*[text()]', optional=False)
+    print('NAME', name.text())
+    page.wait_for_timeout(20000000)
+    return {'name': name, 'starting_url': page.row.starting_url}
 if __name__ == '__main__':
     m = Manager([get_google_url(i + ' podcast', site='linkedin.com', num_pages=3) for i in ('constitution', 'free market', 'libertarian', 'capitalist', 'constitution', 'liberty', 'local government')], url_col='url')
     m.start(callback=google)
