@@ -9,11 +9,9 @@ def run(playwright: Playwright) -> None:
     page.goto('https://www.drudgereport.com/', wait_until='load')
     bob = page.query_selector_all('//b')
     for b in bob:
-        n = b.query_selector('//a').get_attribute('href')
+        n = b.query_selector('//a')
         print(n)
-    # print(bob)
-    
-    # ---------------------
+
     context.close()
     browser.close()
 with sync_playwright() as playwright:

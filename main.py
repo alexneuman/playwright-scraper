@@ -1,11 +1,10 @@
 
-from multiprocessing.connection import wait
 from time import sleep
 import re
 
 from rich import print
 
-from tool import Manager
+from tool import Manager, Deferred
 from utils.url_helpers import google_decode, get_google_url
 
 def linkedin(page):
@@ -31,18 +30,39 @@ def linkedin(page):
         useful_words = []
         bio = page.xpath('//h2[contains(text(), "About") and contains(@class, "core")]/following-sibling::*', optional=True)
         # print(urls, 'name')
-        return {'name': name, 'bio': bio, 'job_title': job_title,'starting_url': page.row.starting_url,
+        yield {'name': name, 'bio': bio, 'job_title': job_title,'starting_url': page.row.starting_url,
                 'company': company, 'time_with_company': time_with_company, 'connections': connections, 'leading_open': leading_open,
                 'location': location, 'key_words': ','.join(found_words)}
         
 def google(page):
+    page.wait_for_timeout(500)
+    results = page.xpath('//h3/ancestor::node()[3]', all=True)
     page.wait_for_timeout(2000)
-    # url = google_decode(page.xpath('//h3/../../a', attribute='href', all=True, optional=False))
-    names = page.xpath(selector='//h3', optional=False)
-    name = names.xpath(selector='//*[text()]', optional=False)
-    print('NAME', name.text())
-    page.wait_for_timeout(20000000)
-    return {'name': name, 'starting_url': page.row.starting_url}
+    
+    for result in results:
+        # url =  result.selector.first.locator('//a').first.get_attribute('href')
+        url = result.xpath('//a[@href]').get_attribute('href')
+        if '&' in url and url is not None:
+            url = re.match(r'https[^&]+', url)
+            if url:
+                url = url.group(0)
+            else:
+                print('DEFERRING')
+                return Deferred(callback=google)
+        # url = re.match(r'https[^&]+', url).group(0)
+        page.wait_for_timeout(200)
+        yield {'url': url, 'starting_url': page.row.url}
+        
+def office_depot(page):
+    page.wait_for_timeout(5000000)
+    return
+
+def hermes(page):
+    print('HERMES', page.response)
+    page.wait_for_timeout(50000)
+    return {'bob': 1}
+
 if __name__ == '__main__':
-    m = Manager([get_google_url(i + ' podcast', site='linkedin.com', num_pages=3) for i in ('constitution', 'free market', 'libertarian', 'capitalist', 'constitution', 'liberty', 'local government')], url_col='url')
-    m.start(callback=google)
+    # m = Manager([get_google_url(i + ' podcast', site='linkedin.com/in/', num_pages=100) for i in ('constitution', 'free market', 'libertarian', 'capitalist', 'constitution', 'liberty', 'local government')], url_col='url')
+    m = Manager(inputs=['https://www.walmart.com/shop/Halloween-Candy' for _ in range(1)], url_col='url')
+    m.start(callback=hermes)

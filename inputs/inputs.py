@@ -46,8 +46,6 @@ def set_inputs(inputs: str | list[str] | list[dict] | list[list[str]] = 'inputs.
     return rows
 
     
-    
-
 previous_urls = set()
 try:
     with open('results.csv', 'r') as f:

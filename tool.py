@@ -13,6 +13,7 @@ from playwright.async_api import async_playwright
 from playwright_stealth import stealth_sync
 from rich import print
 
+
 from settings import BROWSER, USER_AGENTS, CONCURRENCY, RETRIES, HEADLESS
 from inputs.inputs import previous_urls, set_inputs
 from utils.misc import suppress
@@ -47,13 +48,14 @@ class Q(Queue):
 
 class Manager:
     RETRIES = 20
-    RETRIES_TO_BROWSER_CLOSE = 5
+    RETRIES_TO_BROWSER_CLOSE = 1
     queue = Q()
     lock = Lock()
     COUNTER = 0
 
     def __init__(self, inputs: list[str]|list[dict]|str, url_col: str, allowed_status_codes: list[int]|None = None, disallowed_status_codes: list[int]|None = None) -> None:
         i = set_inputs(inputs, url_col)
+        print(i)
         self._url_col = url_col
         for row in i:
             url = getattr(row, url_col)
@@ -70,42 +72,58 @@ class Manager:
 
     def main(self, callback, row: tuple, page=None ,*args, **kwargs):
         try:
+            # if not page:
+            #     sem.acquire()
+            # print("STARTING MAIN", row, page)
+            # url = getattr(row, self._url_col)
             if not page:
                 sem.acquire()
-            print("STARTING MAIN", row, page)
-            url = getattr(row, self._url_col)
-            if not page:
+                url = getattr(row, self._url_col)
                 print('ASSIGNING PAGE')
                 page = self.get_page()
                 page.row = row
                 page._url = url
                 page._callback = callback
             if page.RETRIES_TO_BROWSER_CLOSE <= 0:
-                page.close()
+                raise Exception('browser closed')
             print('ROW', row)
             page.goto(url, wait_until='domcontentloaded')
-            result = callback(page)
-            print('GOT SOME RESULT')
-            if result is None or not result:
-                print('RESULT IS NONE, RETRYING')
-                page.RETRIES_TO_BROWSER_CLOSE -= 1
-                result = self.main(callback, row, page, *args, **kwargs)
-            elif isinstance(result, Deferred):
-                self.queue.put(row)
-                page.close()
-                sem.release()
-                return
-            if isinstance(result, list):
-                print('RESULT IS A LIST')
-                page.results = result
-            else:
-                print('RESULT IS NOT A LIST')
-                page.results = [result]
-            print('added results!')
-            print(page.results)
+            # result = callback(page)
+            results = callback(page)
+            try:
+                while (result := next(results)):
+                    print('GOT SOME RESULT', result)
+                    if result is None or not result:
+                        print('RESULT IS NONE')
+                        page.results = []
+                        page.RETRIES_TO_BROWSER_CLOSE -= 1
+                        self.main(callback, row, page, *args, **kwargs)
+                    elif isinstance(result, Deferred):
+                        print('RESULT IS DEFERRED')
+                        self.queue.put(row)
+                        page.results = []
+                        # sem.release()
+                        break
+                    else:
+                        print('RESULT IS NOT NONE')
+                        page.results.append(result)
+                        
+            except StopIteration:
+                pass
+            # if isinstance(result, list):
+            #     print('RESULT IS A LIST')
+            #     page.results = result
+            # else:
+            #     print('RESULT IS NOT A LIST')
+            #     page.results = [result]
+            # print('added results!')
+            # print(page.results)
             # page.close()
             # print('page closed!')
             # sem.release()
+        except:
+            self.queue.put(row)
+            page.results = []
         finally:
             self.__class__.COUNTER += 1
             print(self.__class__.COUNTER, 'COUNTER')
@@ -114,10 +132,9 @@ class Manager:
                 with self.lock:
                     change_region(prefix='us')
                     sleep(600)
-            print('IN FINALLY')
-            if page is not None:
-                print('IN FINALLY')
+            with suppress():
                 page.close()
+            print(self.queue.qsize())
             sem.release()
 
     def start(self, callback, *args, **kwargs) -> None:
@@ -155,22 +172,34 @@ class Deferred:
     def __init__(self, callback, *args, **kwargs):
         self.callback = callback
         
-class SelectorsList():
+class SelectorsList(list):
     
     def __init__(self, page, selectors):
-        self.selectors = [Selector(page, s) for s in selectors]
+        self.selectors = []
+        count = selectors.count()
+        for i in range(count):
+            locator = selectors.nth(i)
+            self.append(Selector(page, locator))
+        # self.selectors = [Selector(page, s) for s in selectors]
+        # self.append(Selector(page, s) for s in selectors)
         
     # set iter to loop over selectors
     
-    def __iter__(self):
-        return iter(self.selectors)
+    # def __iter__(self):
+    #     iter(self.selectors)
+
+    # def __get_item__(self, index):
+    #     return self.selectors[index]
+        
+    def __repr__(self):
+        return f'{self.selectors}'
     
         
 class Selector():
     
-    def __init__(self, page = None, _selector = None):
+    def __init__(self, page = None, _locator = None):
         self.page = page
-        self.selector = _selector
+        self.locator = _locator
         
     def _selector(
         self,
@@ -191,7 +220,7 @@ class Selector():
         with suppress(optional=optional):
             print("LOOKING FOR SELECTOR", selector)
             try:
-                t = page.wait_for_selector(selector, timeout=timeout, state='attached')
+                page.wait_for_selector(selector, timeout=timeout, state='attached')
             except:
                 if page.RETRIES > 0:
                     page.RETRIES -= 1
@@ -201,10 +230,15 @@ class Selector():
                     pass
             
             if all:
-                return SelectorsList(selectors=page.query_selector_all(selector), page=page)
+                # return SelectorsList(selectors=page.query_selector_all(selector), page=page)
+                return SelectorsList(selectors=page.locator(selector), page=page)
                 
             else:
-                self.selector = page.query_selector(selector)
+                # self.selector = page.query_selector(selector)
+                if self.locator:
+                    self.selector = self.locator.first.locator(selector).first
+                else:
+                    self.selector = page.locator(selector).first
                 return self
         
     def xpath(self, selector: str, timeout: float = 1000, optional: bool = False, all: bool = False):
@@ -215,7 +249,7 @@ class Selector():
             return self._selector(selector, timeout, optional, all)
         
     def text(self):
-        return self.selector.inner_text()
+        return self.selector.first.inner_text()
     
     def get_attribute(self, attribute: str):
         return self.selector.get_attribute(attribute)
@@ -226,11 +260,11 @@ class Page:
     def __init__(self):
         playwright = sync_playwright().start()
         self.settings = Settings()
-        self.browser = self.settings._get_browser(playwright, random=True).launch(headless=HEADLESS)
+        self.browser = self.settings._get_browser(playwright, random=False).launch(headless=HEADLESS)
         self.context = self.browser.new_context(user_agent=choice(USER_AGENTS))
         self.page = self.context.new_page()
-        # stealth_sync(self.page)
-        self.results = RESULTS
+        stealth_sync(self.page)
+        self.results = []
         self.OUTPUT_FILE = "results.csv"
         self.row: NamedTuple | None = None
         
@@ -288,7 +322,7 @@ class Page:
         url: str,
         ignore_errors: bool = False,
         retries: int = RETRIES,
-        delay: int = 2000,
+        delay: int = 10000,
         *args,
         **kwargs,
     ):
@@ -298,14 +332,17 @@ class Page:
         if url in dupe_filter:
             return
         print("GOING TO URL")
+        self.page.wait_for_timeout(delay)
         resp = self.page.goto(url, *args, **kwargs)
+        
         print('RESP', resp)
         if resp is not None and resp != () and resp.status in self.manager.allowed_status_codes and resp.status not in self.manager.disallowed_status_codes:
-            print('GOOD RESPONSE', resp)
-            dupe_filter.add(url)
+            print('GOOD RESPONSE', resp.status)
+            # dupe_filter.add(url)
             return
         else:
             # bad response
+            print('BAD RESPONSE')
             self.wait_for_timeout(delay)
             self.RETRIES_TO_BROWSER_CLOSE -= 1
             try:
@@ -313,11 +350,13 @@ class Page:
                 self.goto(url, delay=delay)
                 print('WENT TO URL')
             except:
-                self.close()
-                self.manager.queue.put(self.row)
+                # self.close()
+                # self.manager.queue.put(self.row)
+                raise ValueError('BAD RESPONSE')
                 print('THE BROWSER WAS FORCEFULLY CLOSED', self.url.replace('https://', ''))
             finally:
-                sem.release()
+                pass
+                # sem.release()
                 
     def click_gone(self, selector, timeout=1000, delay=100, optional=False, *args, **kwargs):
         with suppress(optional=optional):
@@ -337,7 +376,12 @@ class Page:
     def close(self):
         print('closing page')
         self._write_output(items=self.results, output_file=self.OUTPUT_FILE)
+        if self.results:
+            print('THERE aRe RESULTS')
+        else:
+            print('NO RESULTS')
         self.browser.close()
+        dupe_filter.add(self.url)
         print('closed browser!')
         
     def scroll(self, selector, timeout=1000, delay=100, optional=False, *args, **kwargs):
